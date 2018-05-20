@@ -1,0 +1,15 @@
+[package]
+name = "kdtree-demo"
+description = "K-dimensional tree space-partitioning data structure demo."
+version = "0.1.0"
+license = "MIT"
+authors = ["Alexey Voznyuk <me@swizard.info>"]
+
+[dependencies]
+kdtree = { git = "https://github.com/swizard0/kdtree.git" }
+log = "0.4"
+clap = "2.31"
+rand = "0.4"
+env_logger = "0.5"
+gfx_core = "0.8"
+piston_window = "0.79"
