@@ -106,11 +106,17 @@ fn run() -> Result<(), Error> {
             }
             // draw cursor
             if let Some(Point { x: mx, y: my, }) = env.cursor {
+                let color = match env.business {
+                    Business::Construct =>
+                        [1.0, 0., 0., 1.0],
+                    Business::Collide =>
+                        [0., 1.0, 0., 1.0],
+                };
                 if let Some(Point { x: cx, y: cy, }) = env.obj_start {
-                    line([1.0, 0., 0., 1.0], 3., [cx, cy, mx, my], context.transform, g2d);
+                    line(color, 3., [cx, cy, mx, my], context.transform, g2d);
                 } else {
                     ellipse(
-                        [1.0, 0., 0., 1.0],
+                        color,
                         [mx - 5., my - 5., 10., 10.,],
                         context.transform,
                         g2d,
@@ -137,6 +143,8 @@ fn run() -> Result<(), Error> {
                 break,
             Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::C), state: ButtonState::Release, .. })) =>
                 env.clear(),
+            Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::M), state: ButtonState::Release, .. })) =>
+                env.toggle_mode(),
             Event::Input(Input::Move(Motion::MouseCursor(x, y))) =>
                 env.set_cursor(x, y),
             Event::Input(Input::Cursor(false)) =>
@@ -186,7 +194,13 @@ impl Env {
         }
     }
 
+    fn reset(&mut self, _width: u32, _height: u32) {
+        self.clear();
+    }
+
     fn clear(&mut self) {
+        self.reset_cursor();
+        self.obstacles.clear();
     }
 
     fn set_cursor(&mut self, x: f64, y: f64) {
@@ -219,7 +233,12 @@ impl Env {
         }
     }
 
-    fn reset(&mut self, _width: u32, _height: u32) {
-        self.reset_cursor();
+    fn toggle_mode(&mut self) {
+        self.business = match self.business {
+            Business::Construct =>
+                Business::Collide,
+            Business::Collide =>
+                Business::Construct,
+        };
     }
 }
