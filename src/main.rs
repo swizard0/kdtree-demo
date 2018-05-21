@@ -93,72 +93,86 @@ fn run() -> Result<(), Error> {
             error: e,
         }))?;
 
+    let mut obstacles = Vec::new();
     let mut env = Env::new();
-    while let Some(event) = window.next() {
-        let maybe_result = window.draw_2d(&event, |context, g2d| {
-            use piston_window::{clear, text, ellipse, line, Transformed};
-            // clear everything
-            clear([0.0, 0.0, 0.0, 1.0], g2d);
 
-            // draw obstacles
-            for &Segment { src: Point { x: mx, y: my, }, dst: Point { x: cx, y: cy, }, } in env.obstacles.iter() {
-                line([0.75, 0., 0., 1.0], 2., [cx, cy, mx, my], context.transform, g2d);
-            }
-            // draw cursor
-            if let Some(Point { x: mx, y: my, }) = env.cursor {
-                let color = match env.business {
-                    Business::Construct =>
-                        [1.0, 0., 0., 1.0],
-                    Business::Collide =>
-                        [0., 1.0, 0., 1.0],
-                };
-                if let Some(Point { x: cx, y: cy, }) = env.obj_start {
-                    line(color, 3., [cx, cy, mx, my], context.transform, g2d);
+    loop {
+        let mut action: Box<FnMut(&mut Vec<Segment>)> = {
+            let dummy = &obstacles;
+            loop {
+                let event = if let Some(ev) = window.next() {
+                    ev
                 } else {
-                    ellipse(
-                        color,
-                        [mx - 5., my - 5., 10., 10.,],
-                        context.transform,
-                        g2d,
-                    );
+                    return Ok(());
+                };
+                let maybe_result = window.draw_2d(&event, |context, g2d| {
+                    use piston_window::{clear, text, ellipse, line, Transformed};
+                    // clear everything
+                    clear([0.0, 0.0, 0.0, 1.0], g2d);
+
+                    // draw obstacles
+                    for &Segment { src: Point { x: mx, y: my, }, dst: Point { x: cx, y: cy, }, } in obstacles.iter() {
+                        line([0.75, 0., 0., 1.0], 2., [cx, cy, mx, my], context.transform, g2d);
+                    }
+                    // draw cursor
+                    if let Some(Point { x: mx, y: my, }) = env.cursor {
+                        let color = match env.business {
+                            Business::Construct =>
+                                [1.0, 0., 0., 1.0],
+                            Business::Collide =>
+                                [0., 1.0, 0., 1.0],
+                        };
+                        if let Some(Point { x: cx, y: cy, }) = env.obj_start {
+                            line(color, 3., [cx, cy, mx, my], context.transform, g2d);
+                        } else {
+                            ellipse(
+                                color,
+                                [mx - 5., my - 5., 10., 10.,],
+                                context.transform,
+                                g2d,
+                            );
+                        }
+                    }
+                    // draw menu
+                    text::Text::new_color([0.0, 1.0, 0.0, 1.0], 16).draw(
+                        &env.business.info_line(),
+                        &mut glyphs,
+                        &context.draw_state,
+                        context.transform.trans(5.0, 20.0),
+                        g2d
+                    ).map_err(PistonError::DrawText)?;
+
+                    Ok(())
+                });
+                if let Some(result) = maybe_result {
+                    let () = result.map_err(Error::Piston)?;
+                }
+
+                match event {
+                    Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::Q), state: ButtonState::Release, .. })) =>
+                        return Ok(()),
+                    Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::C), state: ButtonState::Release, .. })) =>
+                        break Box::new(|obstacles| {
+                            obstacles.clear();
+                            env.reset_cursor();
+                        }),
+                    Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::M), state: ButtonState::Release, .. })) =>
+                        env.toggle_mode(),
+                    Event::Input(Input::Move(Motion::MouseCursor(x, y))) =>
+                        env.set_cursor(x, y),
+                    Event::Input(Input::Cursor(false)) =>
+                        env.reset_cursor(),
+                    Event::Input(Input::Button(ButtonArgs { button: Button::Mouse(MouseButton::Left), state: ButtonState::Release, .. })) =>
+                        break Box::new(|obstacles| env.toggle_obj(obstacles)),
+                    Event::Input(Input::Resize(width, height)) =>
+                        env.reset(width, height),
+                    _ =>
+                        (),
                 }
             }
-            // draw menu
-            text::Text::new_color([0.0, 1.0, 0.0, 1.0], 16).draw(
-                &env.business.info_line(),
-                &mut glyphs,
-                &context.draw_state,
-                context.transform.trans(5.0, 20.0),
-                g2d
-            ).map_err(PistonError::DrawText)?;
-
-            Ok(())
-        });
-        if let Some(result) = maybe_result {
-            let () = result.map_err(Error::Piston)?;
-        }
-
-        match event {
-            Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::Q), state: ButtonState::Release, .. })) =>
-                break,
-            Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::C), state: ButtonState::Release, .. })) =>
-                env.clear(),
-            Event::Input(Input::Button(ButtonArgs { button: Button::Keyboard(Key::M), state: ButtonState::Release, .. })) =>
-                env.toggle_mode(),
-            Event::Input(Input::Move(Motion::MouseCursor(x, y))) =>
-                env.set_cursor(x, y),
-            Event::Input(Input::Cursor(false)) =>
-                env.reset_cursor(),
-            Event::Input(Input::Button(ButtonArgs { button: Button::Mouse(MouseButton::Left), state: ButtonState::Release, .. })) =>
-                env.toggle_obj(),
-            Event::Input(Input::Resize(width, height)) =>
-                env.reset(width, height),
-            _ =>
-                (),
-        }
+        };
+        action(&mut obstacles);
     }
-
-    Ok(())
 }
 
 enum Business {
@@ -181,7 +195,6 @@ struct Env {
     business: Business,
     cursor: Option<Point>,
     obj_start: Option<Point>,
-    obstacles: Vec<Segment>,
 }
 
 impl Env {
@@ -190,17 +203,11 @@ impl Env {
             business: Business::Construct,
             cursor: None,
             obj_start: None,
-            obstacles: Vec::new(),
         }
     }
 
     fn reset(&mut self, _width: u32, _height: u32) {
-        self.clear();
-    }
-
-    fn clear(&mut self) {
         self.reset_cursor();
-        self.obstacles.clear();
     }
 
     fn set_cursor(&mut self, x: f64, y: f64) {
@@ -216,12 +223,12 @@ impl Env {
         self.obj_start = None;
     }
 
-    fn toggle_obj(&mut self) {
+    fn toggle_obj(&mut self, obstacles: &mut Vec<Segment>) {
         if let Some(src) = self.cursor {
             self.obj_start = if let Some(dst) = self.obj_start {
                 match self.business {
                     Business::Construct =>
-                        self.obstacles.push(Segment { src, dst, }),
+                        obstacles.push(Segment { src, dst, }),
                     Business::Collide =>
                     // TODO
                         (),
