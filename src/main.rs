@@ -6,8 +6,9 @@ extern crate piston_window;
 #[macro_use] extern crate log;
 #[macro_use] extern crate clap;
 
-use std::{io, thread, process};
-use std::sync::mpsc;
+use std::{io, process};
+// use std::{io, thread, process};
+// use std::sync::mpsc;
 use std::path::PathBuf;
 
 use clap::Arg;
@@ -27,6 +28,10 @@ use piston_window::{
     Key,
 };
 
+mod common;
+
+use common::{Point, Segment};
+
 fn main() {
     env_logger::init();
     match run() {
@@ -43,8 +48,8 @@ fn main() {
 enum Error {
     MissingParameter(&'static str),
     Piston(PistonError),
-    ThreadSpawn(io::Error),
-    ThreadJoin(Box<std::any::Any + Send + 'static>),
+    // ThreadSpawn(io::Error),
+    // ThreadJoin(Box<std::any::Any + Send + 'static>),
 }
 
 #[derive(Debug)]
@@ -95,9 +100,13 @@ fn run() -> Result<(), Error> {
             // clear everything
             clear([0.0, 0.0, 0.0, 1.0], g2d);
 
+            // draw obstacles
+            for &Segment { src: Point { x: mx, y: my, }, dst: Point { x: cx, y: cy, }, } in env.obstacles.iter() {
+                line([0.75, 0., 0., 1.0], 2., [cx, cy, mx, my], context.transform, g2d);
+            }
             // draw cursor
-            if let Some((mx, my)) = env.cursor {
-                if let Some((cx, cy)) = env.obj_start {
+            if let Some(Point { x: mx, y: my, }) = env.cursor {
+                if let Some(Point { x: cx, y: cy, }) = env.obj_start {
                     line([1.0, 0., 0., 1.0], 3., [cx, cy, mx, my], context.transform, g2d);
                 } else {
                     ellipse(
@@ -155,15 +164,16 @@ impl Business {
             &Business::Construct =>
                 "[ constructing ] <M> switch to collide mode, <C> to clear or <Q> to exit".to_string(),
             &Business::Collide =>
-                "[ colliding ] <M> swithc to construct mode, <C> to clear or <Q> to exit".to_string(),
+                "[ colliding ] <M> switch to construct mode, <C> to clear or <Q> to exit".to_string(),
         }
     }
 }
 
 struct Env {
     business: Business,
-    cursor: Option<(f64, f64)>,
-    obj_start: Option<(f64, f64)>,
+    cursor: Option<Point>,
+    obj_start: Option<Point>,
+    obstacles: Vec<Segment>,
 }
 
 impl Env {
@@ -172,6 +182,7 @@ impl Env {
             business: Business::Construct,
             cursor: None,
             obj_start: None,
+            obstacles: Vec::new(),
         }
     }
 
@@ -182,7 +193,7 @@ impl Env {
         self.cursor = if y < CONSOLE_HEIGHT as f64 {
             None
         } else {
-            Some((x, y))
+            Some(Point { x, y, })
         }
     }
 
@@ -192,17 +203,23 @@ impl Env {
     }
 
     fn toggle_obj(&mut self) {
-        if let Some((mx, my)) = self.cursor {
-            self.obj_start = if let Some((cx, cy)) = self.obj_start {
-                // TODO
+        if let Some(src) = self.cursor {
+            self.obj_start = if let Some(dst) = self.obj_start {
+                match self.business {
+                    Business::Construct =>
+                        self.obstacles.push(Segment { src, dst, }),
+                    Business::Collide =>
+                    // TODO
+                        (),
+                }
                 None
             } else {
-                Some((mx, my))
+                Some(src)
             };
         }
     }
 
-    fn reset(&mut self, width: u32, height: u32) {
+    fn reset(&mut self, _width: u32, _height: u32) {
         self.reset_cursor();
     }
 }
