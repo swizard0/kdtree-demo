@@ -6,10 +6,9 @@ extern crate piston_window;
 #[macro_use] extern crate log;
 #[macro_use] extern crate clap;
 
-use std::{io, process};
-// use std::{io, thread, process};
-// use std::sync::mpsc;
+use std::{io, iter, process};
 use std::path::PathBuf;
+use std::cmp::Ordering;
 
 use clap::Arg;
 use piston_window::{
@@ -28,10 +27,6 @@ use piston_window::{
     Key,
 };
 
-mod common;
-
-use common::{Point, Segment};
-
 fn main() {
     env_logger::init();
     match run() {
@@ -48,8 +43,6 @@ fn main() {
 enum Error {
     MissingParameter(&'static str),
     Piston(PistonError),
-    // ThreadSpawn(io::Error),
-    // ThreadJoin(Box<std::any::Any + Send + 'static>),
 }
 
 #[derive(Debug)]
@@ -98,7 +91,13 @@ fn run() -> Result<(), Error> {
 
     loop {
         let mut action: Box<FnMut(&mut Vec<Segment>)> = {
-            let dummy = &obstacles;
+            let mut cutter = VisualCutter::new(&obstacles);
+            let tree = kdtree::KdvTree::build(
+                iter::once(Axis::X).chain(iter::once(Axis::Y)),
+                0 .. obstacles.len(),
+                &mut cutter,
+            ).unwrap_or_else(|()| unreachable!());
+
             loop {
                 let event = if let Some(ev) = window.next() {
                     ev
@@ -247,5 +246,123 @@ impl Env {
             Business::Collide =>
                 Business::Construct,
         };
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Segment {
+    src: Point,
+    dst: Point,
+}
+
+#[derive(Clone, Debug)]
+enum Axis { X, Y, }
+
+impl kdtree::Axis<Point> for Axis {
+    fn cut_point<I>(&self, points: I) -> Option<Point> where I: Iterator<Item = Point> {
+        let mut total = 0;
+        let mut sum = 0.;
+        for p in points {
+            sum += match self {
+                &Axis::X => p.x,
+                &Axis::Y => p.y,
+            };
+            total += 1;
+        }
+        if total == 0 {
+            None
+        } else {
+            let mid = sum / total as f64;
+            Some(match self {
+                &Axis::X => Point { x: mid, y: 0., },
+                &Axis::Y => Point { x: 0., y: mid, },
+            })
+        }
+    }
+
+    fn cmp_points(&self, a: &Point, b: &Point) -> Ordering {
+        match self {
+            &Axis::X =>
+                if a.x < b.x { Ordering::Less } else if a.x > b.x { Ordering::Greater } else { Ordering::Equal },
+            &Axis::Y =>
+                if a.y < b.y { Ordering::Less } else if a.y > b.y { Ordering::Greater } else { Ordering::Equal },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Bound {
+    lt: Point,
+    rb: Point,
+}
+
+impl kdtree::BoundingVolume for Bound {
+    type Point = Point;
+
+    fn min_corner(&self) -> Self::Point { self.lt }
+    fn max_corner(&self) -> Self::Point { self.rb }
+}
+
+struct VisualCutter<'a> {
+    shapes: &'a [Segment],
+    cuts: Vec<(Segment, Axis)>,
+}
+
+impl<'a> VisualCutter<'a> {
+    fn new(shapes: &'a [Segment]) -> VisualCutter<'a> {
+        VisualCutter {
+            shapes,
+            cuts: Vec::new(),
+        }
+    }
+}
+
+impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
+    type BoundingVolume = Bound;
+    type Error = ();
+
+    fn bounding_volume(&self, &shape_index: &usize) -> Self::BoundingVolume {
+        let shape = &self.shapes[shape_index];
+        Bound {
+            lt: Point {
+                x: if shape.src.x < shape.dst.x { shape.src.x } else { shape.dst.x },
+                y: if shape.src.y < shape.dst.y { shape.src.y } else { shape.dst.y },
+            },
+            rb: Point {
+                x: if shape.src.x > shape.dst.x { shape.src.x } else { shape.dst.x },
+                y: if shape.src.y > shape.dst.y { shape.src.y } else { shape.dst.y },
+            },
+        }
+    }
+
+    fn cut(&mut self, shape_index: &usize, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
+        Result<Option<(Bound, Bound)>, Self::Error>
+    {
+        let bvol = self.bounding_volume(shape_index);
+        let (side, x, y) = match cut_axis {
+            &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
+                let factor = (cut_point.x - bvol.lt.x) / (bvol.rb.x - bvol.lt.x);
+                (fragment.rb.x - fragment.lt.x, cut_point.x, bvol.lt.y + (factor * (bvol.rb.y - bvol.lt.y)))
+            } else {
+                return Ok(None);
+            },
+            &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
+                let factor = (cut_point.y - bvol.lt.y) / (bvol.rb.y - bvol.lt.y);
+                (fragment.rb.y - fragment.lt.y, bvol.lt.x + (factor * (bvol.rb.x - bvol.lt.x)), cut_point.y)
+            } else {
+                return Ok(None);
+            },
+        };
+        if side < 10. {
+            Ok(None)
+        } else {
+            Ok(Some((Bound { lt: fragment.lt, rb: Point { x, y, } }, Bound { lt: Point { x, y, }, rb: fragment.rb, })))
+        }
     }
 }
