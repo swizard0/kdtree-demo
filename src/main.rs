@@ -383,22 +383,22 @@ impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
                     let left_bound = Bound {
                         lt: Point {
                             x: fragment.lt.x,
-                            y: if left_point.y < cut_point.y { fragment.lt.y } else { y },
+                            y: if left_point.y < y { fragment.lt.y } else { y },
                         },
                         rb: Point {
                             x: cut_point.x,
-                            y: if left_point.y < cut_point.y { y } else { fragment.rb.y },
+                            y: if left_point.y < y { y } else { fragment.rb.y },
                         }
                     };
                     let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
                     let right_bound = Bound {
                         lt: Point {
                             x: cut_point.x,
-                            y: if right_point.y < cut_point.y { fragment.lt.y } else { y },
+                            y: if right_point.y < y { fragment.lt.y } else { y },
                         },
                         rb: Point {
                             x: fragment.rb.x,
-                            y: if right_point.y < cut_point.y { y } else { fragment.rb.y },
+                            y: if right_point.y < y { y } else { fragment.rb.y },
                         },
                     };
                     Ok(Some((left_bound, right_bound)))
@@ -415,22 +415,22 @@ impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
                     let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
                     let upper_bound = Bound {
                         lt: Point {
-                            x: if upper_point.x < cut_point.x { fragment.lt.x } else { x },
+                            x: if upper_point.x < x { fragment.lt.x } else { x },
                             y: fragment.lt.y,
                         },
                         rb: Point {
-                            x: if upper_point.x < cut_point.x { x } else { fragment.rb.x },
+                            x: if upper_point.x < x { x } else { fragment.rb.x },
                             y: cut_point.y,
                         }
                     };
                     let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
                     let lower_bound = Bound {
                         lt: Point {
-                            x: if lower_point.x < cut_point.x { fragment.lt.x } else { x },
+                            x: if lower_point.x < x { fragment.lt.x } else { x },
                             y: cut_point.y,
                         },
                         rb: Point {
-                            x: if lower_point.x < cut_point.x { x } else { fragment.rb.x },
+                            x: if lower_point.x < x { x } else { fragment.rb.x },
                             y: fragment.rb.y,
                         },
                     };
