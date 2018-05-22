@@ -273,27 +273,6 @@ struct Segment {
 enum Axis { X, Y, }
 
 impl kdtree::Axis<Point> for Axis {
-    fn cut_point<I>(&self, points: I) -> Option<Point> where I: Iterator<Item = Point> {
-        let mut total = 0;
-        let mut sum = 0.;
-        for p in points {
-            sum += match self {
-                &Axis::X => p.x,
-                &Axis::Y => p.y,
-            };
-            total += 1;
-        }
-        if total == 0 {
-            None
-        } else {
-            let mid = sum / total as f64;
-            Some(match self {
-                &Axis::X => Point { x: mid, y: 0., },
-                &Axis::Y => Point { x: 0., y: mid, },
-            })
-        }
-    }
-
     fn cmp_points(&self, a: &Point, b: &Point) -> Ordering {
         match self {
             &Axis::X =>
@@ -349,39 +328,117 @@ impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
         }
     }
 
-    fn cut(&mut self, shape_index: &usize, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
+    fn cut_point<I>(&mut self, cut_axis: &Axis, points: I) -> Option<Point> where I: Iterator<Item = Point> {
+        let mut point_min = None;
+        let mut point_max = None;
+        let mut point_sum = Point { x: 0., y: 0., };
+        let mut total = 0;
+        for p in points {
+            let pmin = point_min.get_or_insert(p);
+            if p.x < pmin.x { pmin.x = p.x; }
+            if p.y < pmin.y { pmin.y = p.y; }
+            let pmax = point_max.get_or_insert(p);
+            if p.x > pmax.x { pmax.x = p.x; }
+            if p.y > pmax.y { pmax.y = p.y; }
+            point_sum.x += p.x;
+            point_sum.y += p.y;
+            total += 1;
+        }
+        if total == 0 {
+            None
+        } else {
+            let point_mid = Point {
+                x: point_sum.x / total as f64,
+                y: point_sum.y / total as f64,
+            };
+            if let (Some(pmin), Some(pmax)) = (point_min, point_max) {
+                let cut_seg = match cut_axis {
+                    &Axis::X => Segment {
+                        src: Point { x: point_mid.x, y: pmin.y, },
+                        dst: Point { x: point_mid.x, y: pmax.y, },
+                    },
+                    &Axis::Y => Segment {
+                        src: Point { x: pmin.x, y: point_mid.y, },
+                        dst: Point { x: pmax.x, y: point_mid.y, },
+                    },
+                };
+                self.cuts.push((cut_seg, cut_axis.clone()));
+            }
+            Some(point_mid)
+        }
+    }
+
+    fn cut(&mut self, &shape_index: &usize, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
         Result<Option<(Bound, Bound)>, Self::Error>
     {
-        let bvol = self.bounding_volume(shape_index);
-        let (side, x, y, cut_seg) = match cut_axis {
+        let shape = &self.shapes[shape_index];
+        match cut_axis {
             &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
-                let factor = (cut_point.x - bvol.lt.x) / (bvol.rb.x - bvol.lt.x);
-                let (x, y) = (cut_point.x, bvol.lt.y + (factor * (bvol.rb.y - bvol.lt.y)));
-                let cut_seg = Segment {
-                    src: Point { x, y: fragment.lt.y, },
-                    dst: Point { x, y: fragment.rb.y, },
-                };
-                (fragment.rb.x - fragment.lt.x, x, y, cut_seg)
+                if fragment.rb.x - fragment.lt.x < 10. {
+                    Ok(None)
+                } else {
+                    let factor = (cut_point.x - shape.src.x) / (shape.dst.x - shape.src.x);
+                    let y = shape.src.y + (factor * (shape.dst.y - shape.src.y));
+                    let left_point = if shape.src.x < shape.dst.x { shape.src } else { shape.dst };
+                    let left_bound = Bound {
+                        lt: Point {
+                            x: fragment.lt.x,
+                            y: if left_point.y < cut_point.y { fragment.lt.y } else { y },
+                        },
+                        rb: Point {
+                            x: cut_point.x,
+                            y: if left_point.y < cut_point.y { y } else { fragment.rb.y },
+                        }
+                    };
+                    let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
+                    let right_bound = Bound {
+                        lt: Point {
+                            x: cut_point.x,
+                            y: if right_point.y < cut_point.y { fragment.lt.y } else { y },
+                        },
+                        rb: Point {
+                            x: fragment.rb.x,
+                            y: if right_point.y < cut_point.y { y } else { fragment.rb.y },
+                        },
+                    };
+                    Ok(Some((left_bound, right_bound)))
+                }
             } else {
                 return Ok(None);
             },
             &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
-                let factor = (cut_point.y - bvol.lt.y) / (bvol.rb.y - bvol.lt.y);
-                let (x, y) = (bvol.lt.x + (factor * (bvol.rb.x - bvol.lt.x)), cut_point.y);
-                let cut_seg = Segment {
-                    src: Point { x: fragment.lt.x, y, },
-                    dst: Point { x: fragment.rb.x, y, },
-                };
-                (fragment.rb.y - fragment.lt.y, x, y, cut_seg)
+                if fragment.rb.y - fragment.lt.y < 10. {
+                    Ok(None)
+                } else {
+                    let factor = (cut_point.y - shape.src.y) / (shape.dst.y - shape.src.y);
+                    let x = shape.src.x + (factor * (shape.dst.x - shape.src.x));
+                    let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
+                    let upper_bound = Bound {
+                        lt: Point {
+                            x: if upper_point.x < cut_point.x { fragment.lt.x } else { x },
+                            y: fragment.lt.y,
+                        },
+                        rb: Point {
+                            x: if upper_point.x < cut_point.x { x } else { fragment.rb.x },
+                            y: cut_point.y,
+                        }
+                    };
+                    let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
+                    let lower_bound = Bound {
+                        lt: Point {
+                            x: if lower_point.x < cut_point.x { fragment.lt.x } else { x },
+                            y: cut_point.y,
+                        },
+                        rb: Point {
+                            x: if lower_point.x < cut_point.x { x } else { fragment.rb.x },
+                            y: fragment.rb.y,
+                        },
+                    };
+                    Ok(Some((upper_bound, lower_bound)))
+                }
             } else {
                 return Ok(None);
             },
-        };
-        if side < 10. {
-            Ok(None)
-        } else {
-            self.cuts.push((cut_seg, cut_axis.clone()));
-            Ok(Some((Bound { lt: fragment.lt, rb: Point { x, y, } }, Bound { lt: Point { x, y, }, rb: fragment.rb, })))
         }
     }
 }
