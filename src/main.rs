@@ -9,6 +9,7 @@ extern crate piston_window;
 use std::{io, iter, process};
 use std::path::PathBuf;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use clap::Arg;
 use piston_window::{
@@ -89,6 +90,7 @@ fn run() -> Result<(), Error> {
     let mut obstacles = Vec::new();
     let mut env = Env::new();
     let mut collide_cutter: SegmentsCutter = Default::default();
+    let mut collide_cache = HashSet::new();
 
     loop {
         let mut action: Box<FnMut(&mut Vec<Segment>)> = {
@@ -106,7 +108,7 @@ fn run() -> Result<(), Error> {
                     return Ok(());
                 };
                 let maybe_result = window.draw_2d(&event, |context, g2d| {
-                    use piston_window::{clear, text, ellipse, line, Transformed};
+                    use piston_window::{clear, text, ellipse, line, rectangle, Transformed};
                     // clear everything
                     clear([0.0, 0.0, 0.0, 1.0], g2d);
 
@@ -120,18 +122,33 @@ fn run() -> Result<(), Error> {
                     }
                     // draw collisions
                     if let Some(collide_segment) = env.collide_segment() {
+                        collide_cache.clear();
                         for maybe_intersection in tree.intersects(&collide_segment, &mut collide_cutter) {
                             let kdtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
                                 .unwrap_or_else(|()| unreachable!());
-                            let obstacle = &obstacles[shape_index];
-                            line(
-                                [0.75, 0.75, 0., 1.0],
-                                3.,
-                                [obstacle.src.x, obstacle.src.y, obstacle.dst.x, obstacle.dst.y],
+                            rectangle(
+                                [1., 0., 0., 0.25],
+                                [shape_fragment.lt.x, shape_fragment.lt.y, shape_fragment.rb.x, shape_fragment.rb.y],
                                 context.transform,
-                                g2d
+                                g2d,
                             );
-
+                            rectangle(
+                                [0., 1., 0., 0.25],
+                                [needle_fragment.lt.x, needle_fragment.lt.y, needle_fragment.rb.x, needle_fragment.rb.y],
+                                context.transform,
+                                g2d,
+                            );
+                            if !collide_cache.contains(&shape_index) {
+                                let obstacle = &obstacles[shape_index];
+                                line(
+                                    [0.75, 0.75, 0., 1.0],
+                                    3.,
+                                    [obstacle.src.x, obstacle.src.y, obstacle.dst.x, obstacle.dst.y],
+                                    context.transform,
+                                    g2d,
+                                );
+                                collide_cache.insert(shape_index);
+                            }
                         }
                     }
                     // draw obstacles
