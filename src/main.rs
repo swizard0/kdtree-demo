@@ -88,14 +88,15 @@ fn run() -> Result<(), Error> {
 
     let mut obstacles = Vec::new();
     let mut env = Env::new();
+    let mut collide_cutter: SegmentsCutter = Default::default();
 
     loop {
         let mut action: Box<FnMut(&mut Vec<Segment>)> = {
-            let mut cutter = VisualCutter::new(&obstacles);
-            let _tree = kdtree::KdvTree::build(
+            let mut visual_cutter = VisualCutter::new(&obstacles);
+            let tree = kdtree::KdvTree::build(
                 iter::once(Axis::X).chain(iter::once(Axis::Y)),
                 0 .. obstacles.len(),
-                &mut cutter,
+                &mut visual_cutter,
             ).unwrap_or_else(|()| unreachable!());
 
             loop {
@@ -110,12 +111,28 @@ fn run() -> Result<(), Error> {
                     clear([0.0, 0.0, 0.0, 1.0], g2d);
 
                     // draw kdtree cuts mesh
-                    for &(ref cut_seg, ref axis) in cutter.cuts.iter() {
+                    for &(ref cut_seg, ref axis) in visual_cutter.cuts.iter() {
                         let color = match axis {
                             &Axis::X => [0.25, 0.25, 0., 1.0],
                             &Axis::Y => [0., 0.25, 0.25, 1.0],
                         };
                         line(color, 1., [cut_seg.src.x, cut_seg.src.y, cut_seg.dst.x, cut_seg.dst.y], context.transform, g2d);
+                    }
+                    // draw collisions
+                    if let Some(collide_segment) = env.collide_segment() {
+                        for maybe_intersection in tree.intersects(&collide_segment, &mut collide_cutter) {
+                            let kdtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
+                                .unwrap_or_else(|()| unreachable!());
+                            let obstacle = &obstacles[shape_index];
+                            line(
+                                [0.75, 0.75, 0., 1.0],
+                                3.,
+                                [obstacle.src.x, obstacle.src.y, obstacle.dst.x, obstacle.dst.y],
+                                context.transform,
+                                g2d
+                            );
+
+                        }
                     }
                     // draw obstacles
                     for &Segment { src: Point { x: mx, y: my, }, dst: Point { x: cx, y: cy, }, } in obstacles.iter() {
@@ -237,7 +254,6 @@ impl Env {
                     Business::Construct =>
                         obstacles.push(Segment { src, dst, }),
                     Business::Collide =>
-                    // TODO
                         (),
                 }
                 None
@@ -254,6 +270,14 @@ impl Env {
             Business::Collide =>
                 Business::Construct,
         };
+    }
+
+    fn collide_segment(&self) -> Option<Segment> {
+        if let (&Business::Collide, Some(src), Some(dst)) = (&self.business, self.cursor, self.obj_start) {
+            Some(Segment { src, dst, })
+        } else {
+            None
+        }
     }
 }
 
@@ -296,26 +320,17 @@ impl kdtree::BoundingVolume for Bound {
     fn max_corner(&self) -> Self::Point { self.rb }
 }
 
-struct VisualCutter<'a> {
-    shapes: &'a [Segment],
-    cuts: Vec<(Segment, Axis)>,
+#[derive(Default)]
+struct SegmentsCutter {
+    point_min: Option<Point>,
+    point_max: Option<Point>,
 }
 
-impl<'a> VisualCutter<'a> {
-    fn new(shapes: &'a [Segment]) -> VisualCutter<'a> {
-        VisualCutter {
-            shapes,
-            cuts: Vec::new(),
-        }
-    }
-}
-
-impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
+impl kdtree::VolumeManager<Segment, Axis> for SegmentsCutter {
     type BoundingVolume = Bound;
     type Error = ();
 
-    fn bounding_volume(&self, &shape_index: &usize) -> Self::BoundingVolume {
-        let shape = &self.shapes[shape_index];
+    fn bounding_volume(&self, shape: &Segment) -> Self::BoundingVolume {
         Bound {
             lt: Point {
                 x: if shape.src.x < shape.dst.x { shape.src.x } else { shape.dst.x },
@@ -328,16 +343,16 @@ impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
         }
     }
 
-    fn cut_point<I>(&mut self, cut_axis: &Axis, points: I) -> Option<Point> where I: Iterator<Item = Point> {
-        let mut point_min = None;
-        let mut point_max = None;
+    fn cut_point<I>(&mut self, _cut_axis: &Axis, points: I) -> Option<Point> where I: Iterator<Item = Point> {
+        self.point_min = None;
+        self.point_max = None;
         let mut point_sum = Point { x: 0., y: 0., };
         let mut total = 0;
         for p in points {
-            let pmin = point_min.get_or_insert(p);
+            let pmin = self.point_min.get_or_insert(p);
             if p.x < pmin.x { pmin.x = p.x; }
             if p.y < pmin.y { pmin.y = p.y; }
-            let pmax = point_max.get_or_insert(p);
+            let pmax = self.point_max.get_or_insert(p);
             if p.x > pmax.x { pmax.x = p.x; }
             if p.y > pmax.y { pmax.y = p.y; }
             point_sum.x += p.x;
@@ -347,31 +362,16 @@ impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
         if total == 0 {
             None
         } else {
-            let point_mid = Point {
+            Some(Point {
                 x: point_sum.x / total as f64,
                 y: point_sum.y / total as f64,
-            };
-            if let (Some(pmin), Some(pmax)) = (point_min, point_max) {
-                let cut_seg = match cut_axis {
-                    &Axis::X => Segment {
-                        src: Point { x: point_mid.x, y: pmin.y, },
-                        dst: Point { x: point_mid.x, y: pmax.y, },
-                    },
-                    &Axis::Y => Segment {
-                        src: Point { x: pmin.x, y: point_mid.y, },
-                        dst: Point { x: pmax.x, y: point_mid.y, },
-                    },
-                };
-                self.cuts.push((cut_seg, cut_axis.clone()));
-            }
-            Some(point_mid)
+            })
         }
     }
 
-    fn cut(&mut self, &shape_index: &usize, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
+    fn cut(&mut self, shape: &Segment, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
         Result<Option<(Bound, Bound)>, Self::Error>
     {
-        let shape = &self.shapes[shape_index];
         match cut_axis {
             &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
                 if fragment.rb.x - fragment.lt.x < 10. {
@@ -440,5 +440,57 @@ impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
                 return Ok(None);
             },
         }
+    }
+}
+
+struct VisualCutter<'a> {
+    shapes: &'a [Segment],
+    cuts: Vec<(Segment, Axis)>,
+    base_cutter: SegmentsCutter,
+}
+
+impl<'a> VisualCutter<'a> {
+    fn new(shapes: &'a [Segment]) -> VisualCutter<'a> {
+        VisualCutter {
+            shapes,
+            cuts: Vec::new(),
+            base_cutter: Default::default(),
+        }
+    }
+}
+
+impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
+    type BoundingVolume = Bound;
+    type Error = ();
+
+    fn bounding_volume(&self, &shape_index: &usize) -> Self::BoundingVolume {
+        self.base_cutter.bounding_volume(&self.shapes[shape_index])
+    }
+
+    fn cut_point<I>(&mut self, cut_axis: &Axis, points: I) -> Option<Point> where I: Iterator<Item = Point> {
+        if let Some(point_mid) = self.base_cutter.cut_point(cut_axis, points) {
+            if let (Some(pmin), Some(pmax)) = (self.base_cutter.point_min, self.base_cutter.point_max) {
+                let cut_seg = match cut_axis {
+                    &Axis::X => Segment {
+                        src: Point { x: point_mid.x, y: pmin.y, },
+                        dst: Point { x: point_mid.x, y: pmax.y, },
+                    },
+                    &Axis::Y => Segment {
+                        src: Point { x: pmin.x, y: point_mid.y, },
+                        dst: Point { x: pmax.x, y: point_mid.y, },
+                    },
+                };
+                self.cuts.push((cut_seg, cut_axis.clone()));
+            }
+            Some(point_mid)
+        } else {
+            None
+        }
+    }
+
+    fn cut(&mut self, &shape_index: &usize, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
+        Result<Option<(Bound, Bound)>, Self::Error>
+    {
+        self.base_cutter.cut(&self.shapes[shape_index], fragment, cut_axis, cut_point)
     }
 }
