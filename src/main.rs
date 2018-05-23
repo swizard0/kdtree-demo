@@ -1,5 +1,5 @@
 extern crate rand;
-extern crate kdtree;
+extern crate kdvtree;
 extern crate gfx_core;
 extern crate env_logger;
 extern crate piston_window;
@@ -96,7 +96,7 @@ fn run() -> Result<(), Error> {
     loop {
         let mut action: Box<FnMut(&mut Vec<Segment>)> = {
             let mut visual_cutter = VisualCutter::new(&obstacles);
-            let tree = kdtree::KdvTree::build(
+            let tree = kdvtree::KdvTree::build(
                 iter::once(Axis::X).chain(iter::once(Axis::Y)),
                 0 .. obstacles.len(),
                 &mut visual_cutter,
@@ -125,7 +125,7 @@ fn run() -> Result<(), Error> {
                     if let Some(collide_segment) = env.collide_segment() {
                         collide_cache.clear();
                         for maybe_intersection in tree.intersects(&collide_segment, &mut collide_cutter) {
-                            let kdtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
+                            let kdvtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
                                 .unwrap_or_else(|()| unreachable!());
                             // highlight collided obstacle
                             if !collide_cache.contains(&shape_index) {
@@ -327,7 +327,7 @@ struct Segment {
 #[derive(Clone, Debug)]
 enum Axis { X, Y, }
 
-impl kdtree::Axis<Point> for Axis {
+impl kdvtree::Axis<Point> for Axis {
     fn cmp_points(&self, a: &Point, b: &Point) -> Ordering {
         match self {
             &Axis::X =>
@@ -344,7 +344,7 @@ struct Bound {
     rb: Point,
 }
 
-impl kdtree::BoundingVolume for Bound {
+impl kdvtree::BoundingVolume for Bound {
     type Point = Point;
 
     fn min_corner(&self) -> Self::Point { self.lt }
@@ -357,7 +357,7 @@ struct SegmentsCutter {
     point_max: Option<Point>,
 }
 
-impl kdtree::VolumeManager<Segment, Axis> for SegmentsCutter {
+impl kdvtree::VolumeManager<Segment, Axis> for SegmentsCutter {
     type BoundingVolume = Bound;
     type Error = ();
 
@@ -490,7 +490,7 @@ impl<'a> VisualCutter<'a> {
     }
 }
 
-impl<'a> kdtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
+impl<'a> kdvtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
     type BoundingVolume = Bound;
     type Error = ();
 
