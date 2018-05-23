@@ -53,6 +53,7 @@ enum PistonError {
     DrawText(gfx_core::factory::CombinedError),
 }
 
+const KDTREE_CUT_LIMIT: f64 = 32.;
 const CONSOLE_HEIGHT: u32 = 32;
 const SCREEN_WIDTH: u32 = 640;
 const SCREEN_HEIGHT: u32 = 480;
@@ -126,29 +127,42 @@ fn run() -> Result<(), Error> {
                         for maybe_intersection in tree.intersects(&collide_segment, &mut collide_cutter) {
                             let kdtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
                                 .unwrap_or_else(|()| unreachable!());
-                            rectangle(
-                                [1., 0., 0., 0.25],
-                                [shape_fragment.lt.x, shape_fragment.lt.y, shape_fragment.rb.x, shape_fragment.rb.y],
-                                context.transform,
-                                g2d,
-                            );
-                            rectangle(
-                                [0., 1., 0., 0.25],
-                                [needle_fragment.lt.x, needle_fragment.lt.y, needle_fragment.rb.x, needle_fragment.rb.y],
-                                context.transform,
-                                g2d,
-                            );
+                            // highlight collided obstacle
                             if !collide_cache.contains(&shape_index) {
                                 let obstacle = &obstacles[shape_index];
                                 line(
                                     [0.75, 0.75, 0., 1.0],
-                                    3.,
+                                    4.,
                                     [obstacle.src.x, obstacle.src.y, obstacle.dst.x, obstacle.dst.y],
                                     context.transform,
                                     g2d,
                                 );
                                 collide_cache.insert(shape_index);
                             }
+                            // show collided obstacle bounding volume
+                            rectangle(
+                                [1., 0., 0., 0.5],
+                                [
+                                    shape_fragment.lt.x,
+                                    shape_fragment.lt.y,
+                                    shape_fragment.rb.x - shape_fragment.lt.x,
+                                    shape_fragment.rb.y - shape_fragment.lt.y,
+                                ],
+                                context.transform,
+                                g2d,
+                            );
+                            // show collided user segment bounding volume
+                            rectangle(
+                                [0., 1., 0., 0.5],
+                                [
+                                    needle_fragment.lt.x,
+                                    needle_fragment.lt.y,
+                                    needle_fragment.rb.x - needle_fragment.lt.x,
+                                    needle_fragment.rb.y - needle_fragment.lt.y,
+                                ],
+                                context.transform,
+                                g2d,
+                            );
                         }
                     }
                     // draw obstacles
@@ -161,7 +175,7 @@ fn run() -> Result<(), Error> {
                             Business::Construct =>
                                 [1.0, 0., 0., 1.0],
                             Business::Collide =>
-                                [0., 1.0, 0., 1.0],
+                                [0., 0.25, 0., 1.0],
                         };
                         if let Some(Point { x: cx, y: cy, }) = env.obj_start {
                             line(color, 3., [cx, cy, mx, my], context.transform, g2d);
@@ -391,7 +405,7 @@ impl kdtree::VolumeManager<Segment, Axis> for SegmentsCutter {
     {
         match cut_axis {
             &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
-                if fragment.rb.x - fragment.lt.x < 10. {
+                if fragment.rb.x - fragment.lt.x < KDTREE_CUT_LIMIT {
                     Ok(None)
                 } else {
                     let factor = (cut_point.x - shape.src.x) / (shape.dst.x - shape.src.x);
@@ -424,7 +438,7 @@ impl kdtree::VolumeManager<Segment, Axis> for SegmentsCutter {
                 return Ok(None);
             },
             &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
-                if fragment.rb.y - fragment.lt.y < 10. {
+                if fragment.rb.y - fragment.lt.y < KDTREE_CUT_LIMIT {
                     Ok(None)
                 } else {
                     let factor = (cut_point.y - shape.src.y) / (shape.dst.y - shape.src.y);
