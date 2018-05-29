@@ -90,16 +90,20 @@ fn run() -> Result<(), Error> {
 
     let mut obstacles = Vec::new();
     let mut env = Env::new();
-    let mut collide_cutter: SegmentsCutter = Default::default();
+    let mut collide_cutter: PointsCutter = Default::default();
     let mut collide_cache = HashSet::new();
 
     loop {
         let mut action: Box<FnMut(&mut Vec<Segment>)> = {
-            let mut visual_cutter = VisualCutter::new(&obstacles);
+            let mut visual_cutter = VisualCutter::new();
             let tree = kdvtree::KdvTree::build(
                 iter::once(Axis::X).chain(iter::once(Axis::Y)),
                 0 .. obstacles.len(),
+                |&shape_index: &_| get_bounding_volume(&obstacles[shape_index]),
                 &mut visual_cutter,
+                |&shape_index: &_, fragment: &_, cut_axis: &_, cut_point: &_| {
+                    cut_segment_fragment(&obstacles[shape_index], fragment, cut_axis, cut_point)
+                },
             ).unwrap_or_else(|()| unreachable!());
 
             loop {
@@ -124,7 +128,7 @@ fn run() -> Result<(), Error> {
                     // draw collisions
                     if let Some(collide_segment) = env.collide_segment() {
                         collide_cache.clear();
-                        for maybe_intersection in tree.intersects(&collide_segment, &mut collide_cutter) {
+                        for maybe_intersection in tree.intersects(&collide_segment, get_bounding_volume, &mut collide_cutter, cut_segment_fragment) {
                             let kdvtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
                                 .unwrap_or_else(|()| unreachable!());
                             // highlight collided obstacle
@@ -344,36 +348,31 @@ struct Bound {
     rb: Point,
 }
 
-impl kdvtree::BoundingVolume for Bound {
-    type Point = Point;
+impl kdvtree::BoundingVolume<Point> for Bound {
+    fn min_corner(&self) -> Point { self.lt }
+    fn max_corner(&self) -> Point { self.rb }
+}
 
-    fn min_corner(&self) -> Self::Point { self.lt }
-    fn max_corner(&self) -> Self::Point { self.rb }
+fn get_bounding_volume(shape: &Segment) -> Bound {
+    Bound {
+        lt: Point {
+            x: if shape.src.x < shape.dst.x { shape.src.x } else { shape.dst.x },
+            y: if shape.src.y < shape.dst.y { shape.src.y } else { shape.dst.y },
+        },
+        rb: Point {
+            x: if shape.src.x > shape.dst.x { shape.src.x } else { shape.dst.x },
+            y: if shape.src.y > shape.dst.y { shape.src.y } else { shape.dst.y },
+        },
+    }
 }
 
 #[derive(Default)]
-struct SegmentsCutter {
+struct PointsCutter {
     point_min: Option<Point>,
     point_max: Option<Point>,
 }
 
-impl kdvtree::VolumeManager<Segment, Axis> for SegmentsCutter {
-    type BoundingVolume = Bound;
-    type Error = ();
-
-    fn bounding_volume(&self, shape: &Segment) -> Self::BoundingVolume {
-        Bound {
-            lt: Point {
-                x: if shape.src.x < shape.dst.x { shape.src.x } else { shape.dst.x },
-                y: if shape.src.y < shape.dst.y { shape.src.y } else { shape.dst.y },
-            },
-            rb: Point {
-                x: if shape.src.x > shape.dst.x { shape.src.x } else { shape.dst.x },
-                y: if shape.src.y > shape.dst.y { shape.src.y } else { shape.dst.y },
-            },
-        }
-    }
-
+impl<'s> kdvtree::GetCutPoint<Axis, Point> for &'s mut PointsCutter {
     fn cut_point<I>(&mut self, _cut_axis: &Axis, points: I) -> Option<Point> where I: Iterator<Item = Point> {
         self.point_min = None;
         self.point_max = None;
@@ -399,107 +398,96 @@ impl kdvtree::VolumeManager<Segment, Axis> for SegmentsCutter {
             })
         }
     }
+}
 
-    fn cut(&mut self, shape: &Segment, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
-        Result<Option<(Bound, Bound)>, Self::Error>
-    {
-        match cut_axis {
-            &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
-                if fragment.rb.x - fragment.lt.x < KDTREE_CUT_LIMIT {
-                    Ok(None)
-                } else {
-                    let factor = (cut_point.x - shape.src.x) / (shape.dst.x - shape.src.x);
-                    let y = shape.src.y + (factor * (shape.dst.y - shape.src.y));
-                    let left_point = if shape.src.x < shape.dst.x { shape.src } else { shape.dst };
-                    let left_bound = Bound {
-                        lt: Point {
-                            x: fragment.lt.x,
-                            y: if left_point.y < y { fragment.lt.y } else { y },
-                        },
-                        rb: Point {
-                            x: cut_point.x,
-                            y: if left_point.y < y { y } else { fragment.rb.y },
-                        }
-                    };
-                    let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
-                    let right_bound = Bound {
-                        lt: Point {
-                            x: cut_point.x,
-                            y: if right_point.y < y { fragment.lt.y } else { y },
-                        },
-                        rb: Point {
-                            x: fragment.rb.x,
-                            y: if right_point.y < y { y } else { fragment.rb.y },
-                        },
-                    };
-                    Ok(Some((left_bound, right_bound)))
-                }
+fn cut_segment_fragment(shape: &Segment, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) -> Result<Option<(Bound, Bound)>, ()> {
+    match cut_axis {
+        &Axis::X => if cut_point.x >= fragment.lt.x && cut_point.x <= fragment.rb.x {
+            if fragment.rb.x - fragment.lt.x < KDTREE_CUT_LIMIT {
+                Ok(None)
             } else {
-                return Ok(None);
-            },
-            &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
-                if fragment.rb.y - fragment.lt.y < KDTREE_CUT_LIMIT {
-                    Ok(None)
-                } else {
-                    let factor = (cut_point.y - shape.src.y) / (shape.dst.y - shape.src.y);
-                    let x = shape.src.x + (factor * (shape.dst.x - shape.src.x));
-                    let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
-                    let upper_bound = Bound {
-                        lt: Point {
-                            x: if upper_point.x < x { fragment.lt.x } else { x },
-                            y: fragment.lt.y,
-                        },
-                        rb: Point {
-                            x: if upper_point.x < x { x } else { fragment.rb.x },
-                            y: cut_point.y,
-                        }
-                    };
-                    let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
-                    let lower_bound = Bound {
-                        lt: Point {
-                            x: if lower_point.x < x { fragment.lt.x } else { x },
-                            y: cut_point.y,
-                        },
-                        rb: Point {
-                            x: if lower_point.x < x { x } else { fragment.rb.x },
-                            y: fragment.rb.y,
-                        },
-                    };
-                    Ok(Some((upper_bound, lower_bound)))
-                }
+                let factor = (cut_point.x - shape.src.x) / (shape.dst.x - shape.src.x);
+                let y = shape.src.y + (factor * (shape.dst.y - shape.src.y));
+                let left_point = if shape.src.x < shape.dst.x { shape.src } else { shape.dst };
+                let left_bound = Bound {
+                    lt: Point {
+                        x: fragment.lt.x,
+                        y: if left_point.y < y { fragment.lt.y } else { y },
+                    },
+                    rb: Point {
+                        x: cut_point.x,
+                        y: if left_point.y < y { y } else { fragment.rb.y },
+                    }
+                };
+                let right_point = if shape.src.x < shape.dst.x { shape.dst } else { shape.src };
+                let right_bound = Bound {
+                    lt: Point {
+                        x: cut_point.x,
+                        y: if right_point.y < y { fragment.lt.y } else { y },
+                    },
+                    rb: Point {
+                        x: fragment.rb.x,
+                        y: if right_point.y < y { y } else { fragment.rb.y },
+                    },
+                };
+                Ok(Some((left_bound, right_bound)))
+            }
+        } else {
+            return Ok(None);
+        },
+        &Axis::Y => if cut_point.y >= fragment.lt.y && cut_point.y <= fragment.rb.y {
+            if fragment.rb.y - fragment.lt.y < KDTREE_CUT_LIMIT {
+                Ok(None)
             } else {
-                return Ok(None);
-            },
-        }
+                let factor = (cut_point.y - shape.src.y) / (shape.dst.y - shape.src.y);
+                let x = shape.src.x + (factor * (shape.dst.x - shape.src.x));
+                let upper_point = if shape.src.y < shape.dst.y { shape.src } else { shape.dst };
+                let upper_bound = Bound {
+                    lt: Point {
+                        x: if upper_point.x < x { fragment.lt.x } else { x },
+                        y: fragment.lt.y,
+                    },
+                    rb: Point {
+                        x: if upper_point.x < x { x } else { fragment.rb.x },
+                        y: cut_point.y,
+                    }
+                };
+                let lower_point = if shape.src.y < shape.dst.y { shape.dst } else { shape.src };
+                let lower_bound = Bound {
+                    lt: Point {
+                        x: if lower_point.x < x { fragment.lt.x } else { x },
+                        y: cut_point.y,
+                        },
+                    rb: Point {
+                        x: if lower_point.x < x { x } else { fragment.rb.x },
+                        y: fragment.rb.y,
+                    },
+                };
+                Ok(Some((upper_bound, lower_bound)))
+            }
+        } else {
+            return Ok(None);
+        },
     }
 }
 
-struct VisualCutter<'a> {
-    shapes: &'a [Segment],
+struct VisualCutter {
     cuts: Vec<(Segment, Axis)>,
-    base_cutter: SegmentsCutter,
+    base_cutter: PointsCutter,
 }
 
-impl<'a> VisualCutter<'a> {
-    fn new(shapes: &'a [Segment]) -> VisualCutter<'a> {
+impl VisualCutter {
+    fn new() -> VisualCutter {
         VisualCutter {
-            shapes,
             cuts: Vec::new(),
             base_cutter: Default::default(),
         }
     }
 }
 
-impl<'a> kdvtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
-    type BoundingVolume = Bound;
-    type Error = ();
-
-    fn bounding_volume(&self, &shape_index: &usize) -> Self::BoundingVolume {
-        self.base_cutter.bounding_volume(&self.shapes[shape_index])
-    }
-
+impl<'s> kdvtree::GetCutPoint<Axis, Point> for &'s mut VisualCutter {
     fn cut_point<I>(&mut self, cut_axis: &Axis, points: I) -> Option<Point> where I: Iterator<Item = Point> {
-        if let Some(point_mid) = self.base_cutter.cut_point(cut_axis, points) {
+        if let Some(point_mid) = kdvtree::GetCutPoint::cut_point(&mut &mut self.base_cutter, cut_axis, points) {
             if let (Some(pmin), Some(pmax)) = (self.base_cutter.point_min, self.base_cutter.point_max) {
                 let cut_seg = match cut_axis {
                     &Axis::X => Segment {
@@ -517,11 +505,5 @@ impl<'a> kdvtree::VolumeManager<usize, Axis> for VisualCutter<'a> {
         } else {
             None
         }
-    }
-
-    fn cut(&mut self, &shape_index: &usize, fragment: &Bound, cut_axis: &Axis, cut_point: &Point) ->
-        Result<Option<(Bound, Bound)>, Self::Error>
-    {
-        self.base_cutter.cut(&self.shapes[shape_index], fragment, cut_axis, cut_point)
     }
 }
