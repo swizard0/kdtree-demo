@@ -99,6 +99,7 @@ fn run() -> Result<(), Error> {
             let tree = kdvtree::KdvTree::build(
                 iter::once(Axis::X).chain(iter::once(Axis::Y)),
                 0 .. obstacles.len(),
+                cmp_points,
                 |&shape_index: &_| get_bounding_volume(&obstacles[shape_index]),
                 &mut visual_cutter,
                 |&shape_index: &_, fragment: &_, cut_axis: &_, cut_point: &_| {
@@ -125,49 +126,97 @@ fn run() -> Result<(), Error> {
                         };
                         line(color, 1., [cut_seg.src.x, cut_seg.src.y, cut_seg.dst.x, cut_seg.dst.y], context.transform, g2d);
                     }
-                    // draw collisions
-                    if let Some(collide_segment) = env.collide_segment() {
-                        collide_cache.clear();
-                        for maybe_intersection in tree.intersects(&collide_segment, get_bounding_volume, &mut collide_cutter, cut_segment_fragment) {
-                            let kdvtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
-                                .unwrap_or_else(|()| unreachable!());
-                            // highlight collided obstacle
-                            if !collide_cache.contains(&shape_index) {
-                                let obstacle = &obstacles[shape_index];
-                                line(
-                                    [0.75, 0.75, 0., 1.0],
-                                    4.,
-                                    [obstacle.src.x, obstacle.src.y, obstacle.dst.x, obstacle.dst.y],
+                    // draw collisions or neighbours
+                    match (&env.business, env.cursor, env.obj_start) {
+                        (&Business::Collide, Some(src), Some(dst)) => {
+                            let collide_segment = Segment { src, dst };
+                            collide_cache.clear();
+                            for maybe_intersection in tree.intersects(
+                                &collide_segment,
+                                cmp_points,
+                                get_bounding_volume,
+                                &mut collide_cutter,
+                                cut_segment_fragment
+                            )
+                            {
+                                let kdvtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
+                                    .unwrap_or_else(|()| unreachable!());
+                                // highlight collided obstacle
+                                if !collide_cache.contains(&shape_index) {
+                                    let obstacle = &obstacles[shape_index];
+                                    line(
+                                        [0.75, 0.75, 0., 1.0],
+                                        4.,
+                                        [obstacle.src.x, obstacle.src.y, obstacle.dst.x, obstacle.dst.y],
+                                        context.transform,
+                                        g2d,
+                                    );
+                                    collide_cache.insert(shape_index);
+                                }
+                                // show collided obstacle bounding volume
+                                rectangle(
+                                    [1., 0., 0., 0.5],
+                                    [
+                                        shape_fragment.lt.x,
+                                        shape_fragment.lt.y,
+                                        shape_fragment.rb.x - shape_fragment.lt.x,
+                                        shape_fragment.rb.y - shape_fragment.lt.y,
+                                    ],
                                     context.transform,
                                     g2d,
                                 );
-                                collide_cache.insert(shape_index);
+                                // show collided user segment bounding volume
+                                rectangle(
+                                    [0., 1., 0., 0.5],
+                                    [
+                                        needle_fragment.lt.x,
+                                        needle_fragment.lt.y,
+                                        needle_fragment.rb.x - needle_fragment.lt.x,
+                                        needle_fragment.rb.y - needle_fragment.lt.y,
+                                    ],
+                                    context.transform,
+                                    g2d,
+                                );
                             }
-                            // show collided obstacle bounding volume
-                            rectangle(
-                                [1., 0., 0., 0.5],
-                                [
-                                    shape_fragment.lt.x,
-                                    shape_fragment.lt.y,
-                                    shape_fragment.rb.x - shape_fragment.lt.x,
-                                    shape_fragment.rb.y - shape_fragment.lt.y,
-                                ],
-                                context.transform,
-                                g2d,
-                            );
-                            // show collided user segment bounding volume
-                            rectangle(
-                                [0., 1., 0., 0.5],
-                                [
-                                    needle_fragment.lt.x,
-                                    needle_fragment.lt.y,
-                                    needle_fragment.rb.x - needle_fragment.lt.x,
-                                    needle_fragment.rb.y - needle_fragment.lt.y,
-                                ],
-                                context.transform,
-                                g2d,
-                            );
-                        }
+                        },
+                        (&Business::Neighbours, Some(src), Some(dst)) => {
+                            let (width, height) = context.viewport.as_ref()
+                                .map(|v| (v.draw_size[0] as f64, v.draw_size[1] as f64))
+                                .unwrap_or((SCREEN_WIDTH as f64, SCREEN_HEIGHT as f64));
+                            let max_dist = ((width * width) + (height * height)).sqrt();
+                            let neighbour_segment = Segment { src, dst };
+                            for kdvtree::NearestShape { dist, shape: &_shape_index, fragment, } in tree.nearest(
+                                &neighbour_segment,
+                                cmp_points,
+                                get_bounding_volume,
+                                bound_to_cut_point_dist,
+                                bound_to_bound_dist,
+                            )
+                            {
+                                let color = if dist < (max_dist * 0.334) {
+                                    [1., 1., 1. - (dist / (max_dist * 0.334)) as f32, 1.]
+                                } else if dist < (max_dist * 0.667) {
+                                    [1., 1. - (dist / (max_dist * 0.667)) as f32, 0., 1.]
+                                } else if dist < max_dist {
+                                    [1. - (dist / (max_dist * 0.667)) as f32, 0., 0., 1.]
+                                } else {
+                                    [0., 0., 0., 1.]
+                                };
+                                rectangle(
+                                    color,
+                                    [
+                                        fragment.lt.x,
+                                        fragment.lt.y,
+                                        fragment.rb.x - fragment.lt.x,
+                                        fragment.rb.y - fragment.lt.y,
+                                    ],
+                                    context.transform,
+                                    g2d,
+                                );
+                            }
+                        },
+                        _ =>
+                            (),
                     }
                     // draw obstacles
                     for &Segment { src: Point { x: mx, y: my, }, dst: Point { x: cx, y: cy, }, } in obstacles.iter() {
@@ -180,6 +229,8 @@ fn run() -> Result<(), Error> {
                                 [1.0, 0., 0., 1.0],
                             Business::Collide =>
                                 [0., 0.25, 0., 1.0],
+                            Business::Neighbours =>
+                                [0.824, 0.706, 0.549, 1.0],
                         };
                         if let Some(Point { x: cx, y: cy, }) = env.obj_start {
                             line(color, 3., [cx, cy, mx, my], context.transform, g2d);
@@ -237,6 +288,7 @@ fn run() -> Result<(), Error> {
 enum Business {
     Construct,
     Collide,
+    Neighbours,
 }
 
 impl Business {
@@ -245,7 +297,9 @@ impl Business {
             &Business::Construct =>
                 "[ constructing ] <M> switch to collide mode, <C> to clear or <Q> to exit".to_string(),
             &Business::Collide =>
-                "[ colliding ] <M> switch to construct mode, <C> to clear or <Q> to exit".to_string(),
+                "[ colliding ] <M> switch to neighbours mode, <C> to clear or <Q> to exit".to_string(),
+            &Business::Neighbours =>
+                "[ finding neighbours ] <M> switch to construct mode, <C> to clear or <Q> to exit".to_string(),
         }
     }
 }
@@ -288,7 +342,7 @@ impl Env {
                 match self.business {
                     Business::Construct =>
                         obstacles.push(Segment { src, dst, }),
-                    Business::Collide =>
+                    Business::Collide | Business::Neighbours =>
                         (),
                 }
                 None
@@ -303,16 +357,10 @@ impl Env {
             Business::Construct =>
                 Business::Collide,
             Business::Collide =>
+                Business::Neighbours,
+            Business::Neighbours =>
                 Business::Construct,
         };
-    }
-
-    fn collide_segment(&self) -> Option<Segment> {
-        if let (&Business::Collide, Some(src), Some(dst)) = (&self.business, self.cursor, self.obj_start) {
-            Some(Segment { src, dst, })
-        } else {
-            None
-        }
     }
 }
 
@@ -331,14 +379,12 @@ struct Segment {
 #[derive(Clone, Debug)]
 enum Axis { X, Y, }
 
-impl kdvtree::Axis<Point> for Axis {
-    fn cmp_points(&self, a: &Point, b: &Point) -> Ordering {
-        match self {
-            &Axis::X =>
-                if a.x < b.x { Ordering::Less } else if a.x > b.x { Ordering::Greater } else { Ordering::Equal },
-            &Axis::Y =>
-                if a.y < b.y { Ordering::Less } else if a.y > b.y { Ordering::Greater } else { Ordering::Equal },
-        }
+fn cmp_points(axis: &Axis, a: &Point, b: &Point) -> Ordering {
+    match axis {
+        &Axis::X =>
+            if a.x < b.x { Ordering::Less } else if a.x > b.x { Ordering::Greater } else { Ordering::Equal },
+        &Axis::Y =>
+            if a.y < b.y { Ordering::Less } else if a.y > b.y { Ordering::Greater } else { Ordering::Equal },
     }
 }
 
@@ -469,6 +515,37 @@ fn cut_segment_fragment(shape: &Segment, fragment: &Bound, cut_axis: &Axis, cut_
             return Ok(None);
         },
     }
+}
+
+fn bound_to_cut_point_dist(axis: &Axis, bounding_volume: &Bound, cut_point: &Point) -> f64 {
+    match axis {
+        &Axis::X => {
+            let l = (bounding_volume.lt.x - cut_point.x).abs();
+            let r = (bounding_volume.rb.x - cut_point.x).abs();
+            if l < r { l } else { r }
+        },
+        &Axis::Y => {
+            let t = (bounding_volume.lt.y - cut_point.y).abs();
+            let b = (bounding_volume.rb.y - cut_point.y).abs();
+            if t < b { t } else { b }
+        },
+    }
+}
+
+fn bound_to_bound_dist(bv_a: &Bound, bv_b: &Bound) -> f64 {
+    let get_side = |coord: &Fn(&Point) -> f64| [
+        coord(&bv_a.lt) - coord(&bv_b.lt),
+        coord(&bv_a.lt) - coord(&bv_b.lt),
+        coord(&bv_a.rb) - coord(&bv_b.rb),
+        coord(&bv_a.rb) - coord(&bv_b.rb),
+    ]
+        .iter()
+        .map(|v| v.abs())
+        .min_by(|a, b| if a < b { Ordering::Less } else if a > b { Ordering::Greater } else { Ordering::Equal })
+        .unwrap_or(0.0);
+    let side_x = get_side(&|p: &Point| p.x);
+    let side_y = get_side(&|p: &Point| p.y);
+    ((side_x * side_x) + (side_y * side_y)).sqrt()
 }
 
 struct VisualCutter {
