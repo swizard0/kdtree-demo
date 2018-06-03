@@ -6,7 +6,7 @@ license = "MIT"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 
 [dependencies]
-kdvtree = { git = "https://github.com/swizard0/kdtree.git" }
+kdvtree = "0.7"
 log = "0.4"
 clap = "2.31"
 rand = "0.4"
