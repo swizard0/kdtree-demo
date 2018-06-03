@@ -185,7 +185,7 @@ fn run() -> Result<(), Error> {
                                 .unwrap_or((SCREEN_WIDTH as f64, SCREEN_HEIGHT as f64));
                             let max_dist = ((width * width) + (height * height)).sqrt();
                             let neighbour_segment = Segment { src, dst };
-                            for kdvtree::NearestShape { dist, shape: &_shape_index, fragment, } in tree.nearest(
+                            for kdvtree::NearestShape { dist, shape: &_shape_index, shape_fragment, } in tree.nearest(
                                 &neighbour_segment,
                                 cmp_points,
                                 get_bounding_volume,
@@ -193,22 +193,22 @@ fn run() -> Result<(), Error> {
                                 bound_to_bound_dist,
                             )
                             {
-                                let color = if dist < (max_dist * 0.334) {
-                                    [1., 1., 1. - (dist / (max_dist * 0.334)) as f32, 1.]
-                                } else if dist < (max_dist * 0.667) {
-                                    [1., 1. - (dist / (max_dist * 0.667)) as f32, 0., 1.]
-                                } else if dist < max_dist {
-                                    [1. - (dist / (max_dist * 0.667)) as f32, 0., 0., 1.]
+                                let color = if dist < (max_dist * 0.2) {
+                                    [1., 1., 1. - (dist / (max_dist * 0.2)) as f32, 1.]
+                                } else if dist < (max_dist * 0.4) {
+                                    [1., 1. - (dist / (max_dist * 0.4)) as f32, 0., 1.]
+                                } else if dist < (max_dist * 0.6) {
+                                    [1. - (dist / (max_dist * 0.6)) as f32, 0., 0., 1.]
                                 } else {
                                     [0., 0., 0., 1.]
                                 };
                                 rectangle(
                                     color,
                                     [
-                                        fragment.lt.x,
-                                        fragment.lt.y,
-                                        fragment.rb.x - fragment.lt.x,
-                                        fragment.rb.y - fragment.lt.y,
+                                        shape_fragment.lt.x,
+                                        shape_fragment.lt.y,
+                                        shape_fragment.rb.x - shape_fragment.lt.x,
+                                        shape_fragment.rb.y - shape_fragment.lt.y,
                                     ],
                                     context.transform,
                                     g2d,
@@ -533,19 +533,32 @@ fn bound_to_cut_point_dist(axis: &Axis, bounding_volume: &Bound, cut_point: &Poi
 }
 
 fn bound_to_bound_dist(bv_a: &Bound, bv_b: &Bound) -> f64 {
-    let get_side = |coord: &Fn(&Point) -> f64| [
-        coord(&bv_a.lt) - coord(&bv_b.lt),
-        coord(&bv_a.lt) - coord(&bv_b.lt),
-        coord(&bv_a.rb) - coord(&bv_b.rb),
-        coord(&bv_a.rb) - coord(&bv_b.rb),
-    ]
-        .iter()
-        .map(|v| v.abs())
-        .min_by(|a, b| if a < b { Ordering::Less } else if a > b { Ordering::Greater } else { Ordering::Equal })
-        .unwrap_or(0.0);
-    let side_x = get_side(&|p: &Point| p.x);
-    let side_y = get_side(&|p: &Point| p.y);
-    ((side_x * side_x) + (side_y * side_y)).sqrt()
+    fn dist(xa: f64, ya: f64, xb: f64, yb: f64) -> f64 {
+        ((xb - xa) * (xb - xa) + (yb - ya) * (yb - ya)).sqrt()
+    }
+    let left = bv_b.rb.x < bv_a.lt.x;
+    let right = bv_a.rb.x < bv_b.lt.x;
+    let top = bv_a.rb.y < bv_b.lt.y;
+    let bottom = bv_b.rb.y < bv_a.lt.y;
+    if top && left {
+        dist(bv_a.lt.x, bv_a.rb.y, bv_b.rb.x, bv_b.lt.y)
+    } else if left && bottom {
+        dist(bv_a.lt.x, bv_a.lt.y, bv_b.rb.x, bv_b.rb.y)
+    } else if bottom && right {
+        dist(bv_a.rb.x, bv_a.lt.y, bv_b.lt.x, bv_b.rb.y)
+    } else if right && top {
+        dist(bv_a.rb.x, bv_a.rb.y, bv_b.lt.x, bv_b.lt.y)
+    } else if left {
+        bv_a.lt.x - bv_b.rb.x
+    } else if right {
+        bv_b.lt.x - bv_a.rb.x
+    } else if bottom {
+        bv_a.lt.y - bv_b.rb.y
+    } else if top {
+        bv_b.lt.y - bv_a.rb.y
+    } else {
+        0.
+    }
 }
 
 struct VisualCutter {
