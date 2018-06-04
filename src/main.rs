@@ -136,7 +136,7 @@ fn run() -> Result<(), Error> {
                                 cmp_points,
                                 get_bounding_volume,
                                 &mut collide_cutter,
-                                cut_segment_fragment
+                                cut_segment_fragment,
                             )
                             {
                                 let kdvtree::Intersection { shape: &shape_index, shape_fragment, needle_fragment } = maybe_intersection
@@ -185,14 +185,17 @@ fn run() -> Result<(), Error> {
                                 .unwrap_or((SCREEN_WIDTH as f64, SCREEN_HEIGHT as f64));
                             let max_dist = ((width * width) + (height * height)).sqrt();
                             let neighbour_segment = Segment { src, dst };
-                            for kdvtree::NearestShape { dist, shape: &_shape_index, shape_fragment, } in tree.nearest(
+                            for maybe_neighbour in tree.nearest(
                                 &neighbour_segment,
                                 cmp_points,
                                 get_bounding_volume,
+                                cut_segment_fragment,
                                 bound_to_cut_point_dist,
                                 bound_to_bound_dist,
                             )
                             {
+                                let kdvtree::NearestShape { dist, shape: &_shape_index, shape_fragment, } =
+                                    maybe_neighbour.unwrap_or_else(|()| unreachable!());
                                 let color = if dist < (max_dist * 0.2) {
                                     [1., 1., 1. - (dist / (max_dist * 0.2)) as f32, 1.]
                                 } else if dist < (max_dist * 0.4) {
